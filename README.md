@@ -80,9 +80,72 @@ Start at 25 products, look at your actual bill after a week, then scale. A daily
 
 ## Supported retailers
 
-The Actor covers **249 storefronts across 104 retailer brands** for keyword search, including Amazon, Walmart, Target, eBay, Best Buy, Home Depot, IKEA, Costco, Nordstrom, Macy's, Tesco, Mercado Libre, and Idealo. Direct product URLs work more broadly, because the Actor falls back to generic extraction for stores without a dedicated extractor.
+The Actor's input schema lists **249 storefronts across 104 retailer brands** as valid targets for keyword search. Being on that list is not the same as keyword search returning results.
 
-Not every retailer is covered, and unsupported domains can return partial data rather than an error. Check the Actor's input schema for the current list before committing a watchlist.
+Measured on September 11, 2026, keyword `winter jacket`, US:
+
+| Retailer | Keyword search | Time |
+|---|---|---|
+| Amazon | Full page of products | ~15s |
+| Walmart | Full page of products | ~15s |
+| eBay | Products, but loosely matched | ~39s |
+| Target | Completed, returned nothing | 13s |
+| Kohl's | Completed, returned nothing | 10s |
+| Academy | Completed, returned nothing | 13s |
+| Nordstrom | Completed, returned nothing | 39s |
+| Macy's | Completed, returned nothing | 21s |
+| Dick's Sporting Goods | Timed out | 300s cap |
+
+An empty result is not an error. The run succeeds and hands back an empty list, so a collector that assumes every configured retailer produces rows will quietly record nothing for most of them. Test every retailer you plan to watch before you commit to a watchlist, and treat a timeout as a different problem from an empty result: Dick's may well work with a longer cap.
+
+Direct product URLs are the more reliable path. They bypass search entirely, and the Actor falls back to generic extraction for stores without a dedicated extractor. An unresolvable URL returns an item with empty fields rather than an error, which is why the normalize step drops those rows.
+
+## Search first, then pin the URLs
+
+Keyword mode and URL mode answer different questions, and a price study needs both in order.
+
+Keyword mode returns whatever ranks that day, so the set of products drifts. That is what you want for a snapshot of a category's price distribution, and it is useless as a discount series: a price that "changed" may just be a different product in the same slot.
+
+So run keyword mode once, to learn which retailers respond and to harvest real product URLs. Then pin those URLs and switch to URL mode. From that point every capture measures the same items, and a price move is a price move.
+
+Curate the harvested list before pinning it. Keyword results include things a discount study should not track:
+
+- **Promotional titles.** A Walmart listing whose product name begins `Clearance under $5` is a seller's title tactic, not a retail price signal.
+- **Category drift.** An eBay search for winter jackets returned a Pokemon championship bomber jacket and a denim jacket.
+- **Resale listings.** eBay prices are set by individual sellers, often for used goods. They are a market signal, not a retailer's list price, and they do not fall on Black Friday for the same reasons.
+
+## Field differences that bite
+
+Every retailer answers a slightly different shape, all measured on the runs above:
+
+| | Amazon | Walmart | eBay |
+|---|---|---|---|
+| `offers.price` | number | string, `"$12.99"` | number |
+| `offers.priceCurrency` | symbol, `"$"` | ISO, `"USD"` | ISO, `"USD"` |
+| `brand` | object, sometimes `{slogan}` | object with `slogan` | `{name: null}` |
+| Stock | boolean in `additionalProperties.inStock` | absent | absent on detail pages |
+
+Three consequences for any normalize step:
+
+**Parse the price, never cast it.** One retailer hands you a number and another hands you a currency-prefixed string.
+
+**Normalize the currency to ISO.** Amazon returns the symbol `$`. Storing that makes rows from different markets incomparable.
+
+**Read only strings out of `brand`.** Falling back to the object itself stringifies to `[object Object]`, which is what a first version of this collector wrote for every The North Face row. Amazon also uses `brand.slogan` to hold marketing text like `Visit the Carhartt Store`, so unwrap it and reject anything too long to be a brand.
+
+Stock deserves three states, not two. Absent is not the same as out of stock, and Walmart and eBay simply do not return availability on the paths above.
+
+## Two gotchas that cost real time
+
+**`maxProductResults` caps the whole run, not each marketplace.** A single call listing Amazon, Nordstrom and Macy's with a cap of 30 returned 30 Amazon rows and nothing else. Run one Actor call per retailer, each with its own quota.
+
+**The n8n Apify node reads only the first input item.** Emitting one item per retailer does not fan out: the node executes once and every later item is ignored. Use one node per retailer, or an explicit loop. If you loop, be aware that a retailer returning zero items skips the downstream nodes, so the loop never receives its continue signal and the retailers after it are never attempted.
+
+**The Apify MCP server truncates the marketplace list.** It exposes only the first 120 entries, cutting off mid-IKEA, so `www.walmart.com` and `www.target.com` are rejected as invalid options through MCP even though the Actor accepts them. Read the full list from the public build endpoint instead, which needs no token:
+
+```bash
+curl -s "https://api.apify.com/v2/acts/apify~e-commerce-scraping-tool/builds/default"
+```
 
 ## What the agent will not tell you
 
