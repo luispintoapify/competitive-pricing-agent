@@ -1,0 +1,381 @@
+{
+  "name": "Monitor competitor prices with Apify and post repricing alerts to Slack",
+  "nodes": [
+    {
+      "id": "1073b360-f413-43fd-95f7-d0bc3aa33c8d",
+      "name": "Every morning at 06:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -560,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "eee50952-ac92-4b47-bf81-8008d8b04f27",
+      "name": "Pages to watch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// The only node you edit. Any retailer works, but the ones on the Actor's\n// supported list return the most complete fields.\nconst WATCH = [\n  'https://www.amazon.com/dp/REPLACE_ME',\n  'https://www.nordstrom.com/s/REPLACE_ME',\n];\nconst SLACK_CHANNEL = '#pricing-alerts';\n\nreturn [{ json: { detailsUrls: WATCH.map((url) => ({ url })), slackChannel: SLACK_CHANNEL } }];"
+      },
+      "notes": "The only node you need to edit. Paste competitor product URLs and set the Slack channel."
+    },
+    {
+      "id": "1e35bfa5-227f-4397-9090-8774ef1a20b5",
+      "name": "E-commerce Scraping Tool",
+      "type": "@apify/n8n-nodes-apify.apify",
+      "typeVersion": 1,
+      "position": [
+        -128,
+        0
+      ],
+      "parameters": {
+        "operation": "Run actor and get dataset",
+        "actorId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "2APbAvDfNDOWXbkWf",
+          "cachedResultName": "E-commerce Scraping Tool (apify/e-commerce-scraping-tool)",
+          "cachedResultUrl": "https://console.apify.com/actors/2APbAvDfNDOWXbkWf/input"
+        },
+        "customBody": "={{ JSON.stringify({ detailsUrls: $json.detailsUrls, maxProductResults: $json.detailsUrls.length, additionalProperties: true, scrapeMode: 'AUTO' }) }}",
+        "timeout": 300
+      },
+      "notes": "Run actor and get dataset returns the items in one node, so there is no polling step to get wrong.",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "apifyApi": {
+          "id": "",
+          "name": "Your Apify account"
+        }
+      }
+    },
+    {
+      "id": "b5b41610-0915-405b-b306-b081a30df403",
+      "name": "Normalize products",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Field names, types and nesting differ per retailer, so reading them naively\n// works on one store and breaks on the next.\n//   price     number on some retailers, string on others\n//   currency  offers.priceCurrency on some, offers.currency on others\n//   stock     under additionalProperties, or only in offers.availability\n//   brand     often carries marketing text such as 'Visit the Sony Store'\n// Stock keeps three states: true, false, and null for unknown. Never map\n// unknown to false.\n\nconst num = (v) => {\n  if (typeof v === 'number') return Number.isFinite(v) ? v : null;\n  if (typeof v !== 'string') return null;\n  const n = Number.parseFloat(v.replace(/[^\\d.]/g, ''));\n  return Number.isFinite(n) && n > 0 ? n : null;\n};\n\nconst readStock = (item) => {\n  const extras = item.additionalProperties || {};\n  if (typeof extras.inStock === 'boolean') return extras.inStock;\n  if (typeof item.inStock === 'boolean') return item.inStock;\n  const avail = String((item.offers && item.offers.availability) || item.availability || '').toLowerCase();\n  if (avail.includes('instock')) return true;\n  if (avail.includes('outofstock')) return false;\n  return null;\n};\n\nconst readBrand = (item) => {\n  const raw = String((item.brand && (item.brand.name || item.brand.slogan)) || item.brand || '').trim();\n  const unwrapped = raw.replace(/^Visit the (.+) Store$/i, '$1');\n  if (!unwrapped || unwrapped.length > 40 || unwrapped.split(/\\s+/).length > 4) return null;\n  return unwrapped;\n};\n\nconst rows = [];\nfor (const entry of $input.all()) {\n  const item = entry.json || {};\n  const offers = item.offers || {};\n  const extras = item.additionalProperties || {};\n  const url = item.url || item.inputUrl || '';\n  const price = num(offers.price);\n\n  // An unresolvable URL returns an item with every field empty rather than an\n  // error, so drop those instead of writing blank rows.\n  if (!url || (!price && !item.name)) continue;\n\n  let retailer = '';\n  const host = String(url).match(/^https?:\\/\\/([^/?#]+)/);\n  if (host) retailer = host[1].replace(/^www\\./, '');\n\n  rows.push({\n    sku_key: url,\n    product_url: url,\n    retailer,\n    product_name: String(item.name || item.title || '').replace(/opens in a new (window or )?tab$/i, '').trim() || null,\n    brand: readBrand(item),\n    price,\n    currency: offers.priceCurrency || offers.currency || extras.currencyRaw || null,\n    in_stock: readStock(item),\n    image_url: Array.isArray(item.image) ? (item.image[0] || null) : (item.image || null),\n    raw: item,\n  });\n}\n\n// One item carrying the whole batch, so the insert below is a single round trip.\nreturn [{ json: { rows, watched: rows.length } }];"
+      },
+      "notes": "Field names, types and nesting differ per retailer. Normalize before storing anything."
+    },
+    {
+      "id": "7a4f32d5-0bdf-45ba-9af4-1029ad3f1b6f",
+      "name": "Save today's snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        320,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into price_history\n  (sku_key, product_url, retailer, product_name, brand, price, currency, in_stock, image_url, raw)\nselect r.sku_key, r.product_url, r.retailer, r.product_name, r.brand,\n       r.price, r.currency, r.in_stock, r.image_url, r.raw\nfrom jsonb_to_recordset($1::jsonb) as r(\n  sku_key text, product_url text, retailer text, product_name text, brand text,\n  price numeric, currency text, in_stock boolean, image_url text, raw jsonb\n)\non conflict (sku_key, capture_date) do update set\n  captured_at  = now(),\n  price        = excluded.price,\n  currency     = excluded.currency,\n  in_stock     = excluded.in_stock,\n  product_name = excluded.product_name,\n  raw          = excluded.raw;",
+        "options": {
+          "queryReplacement": "={{ JSON.stringify($json.rows) }}"
+        }
+      },
+      "notes": "One row per product per day. Re-running today updates rather than duplicating.",
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres or Supabase"
+        }
+      }
+    },
+    {
+      "id": "0ce60faa-4685-4b68-8e4b-44818be915f3",
+      "name": "Detect moves outside pattern",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        544,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from price_moves_today order by pct_vs_avg_30d asc;",
+        "options": {}
+      },
+      "notes": "Returns nothing until a product has 14 days of history. That silence is deliberate: no baseline, no pattern claim.",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres or Supabase"
+        }
+      }
+    },
+    {
+      "id": "8b2867cc-a739-4fd2-a79f-2d2ebb4b548e",
+      "name": "Collect what moved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Fold every flagged product into one item, so the agent reasons once per run\n// rather than once per product.\nconst moved = $input.all().map((i) => i.json);\nreturn [{ json: { count: moved.length, moved: JSON.stringify(moved, null, 1) } }];"
+      }
+    },
+    {
+      "id": "41935ff9-796e-426f-9828-5257c5bb2664",
+      "name": "Pricing agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        992,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.moved }}",
+        "options": {
+          "systemMessage": "You are a competitive pricing analyst for an online retailer. You receive rows describing competitor products whose price moved outside their normal pattern today. Each row already contains the comparison maths. Turn it into a decision the merchandising lead can act on in one read.\n\nEach row has: product_name, brand, retailer, product_url, price_today, currency, avg_price_30d, min_price_90d, pct_vs_avg_30d, z_score, is_new_90d_low, in_stock, and observations (how many prior days of history exist).\n\nRules:\n1. Lead with the decision, then the reason.\n2. Use only the numbers you were given. Never invent a figure.\n3. You do not know the reader's cost, margin, or price floor. Never state a margin outcome, a break-even, or a specific price to set as if you had calculated it. You may say consider matching, or hold, and you may state the size of the gap.\n4. Say how strong the pattern is, based on observations. Under 30 days is a short record and you must say so.\n5. If in_stock is false, treat it as a supply signal rather than a price signal: the rival cannot sell it right now, which is a reason to hold rather than follow the price down.\n6. If in_stock is null, availability was not reported. Do not treat that as out of stock.\n7. A new 90-day low is the strongest signal here. Call it out when is_new_90d_low is true.\n8. Be brief. One short paragraph per product, at most three. If more than three moved, summarize the pattern and name the two that matter most.\n\nWrite plain text for Slack, no markdown headings."
+        }
+      }
+    },
+    {
+      "id": "749fe4b5-6fcc-43af-b68e-2cfead1304c6",
+      "name": "Chat model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        992,
+        208
+      ],
+      "parameters": {},
+      "notes": "Runs on your own key. Any chat model node works here: OpenAI, Anthropic, Google, or a local one.",
+      "credentials": {
+        "openAiApi": {
+          "id": "",
+          "name": "Your chat model"
+        }
+      }
+    },
+    {
+      "id": "fe8051cb-5aeb-4b5f-a4f6-0e467974d8c0",
+      "name": "Post the alert to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        1216,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $('Pages to watch').first().json.slackChannel }}"
+        },
+        "text": "={{ $json.output }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "",
+          "name": "Slack"
+        }
+      }
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000000",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -440
+      ],
+      "parameters": {
+        "content": "## Competitor price monitoring with a memory\n\nWatches competitor product pages every morning, keeps a price history, and tells you only when a rival moves outside its own pattern.\n\n### Before your first run\n1. Run `supabase_schema.sql` against Postgres or Supabase.\n2. Add your Apify credential on the Actor node.\n3. Add a Postgres credential and a Slack credential.\n4. Open **Pages to watch** and set your URLs and channel.\n\nThe first two weeks are quiet by design: with less than 14 days of history there is no pattern to compare against, so nothing is reported.",
+        "width": 460,
+        "height": 420,
+        "color": 3
+      }
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000001",
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        40,
+        -440
+      ],
+      "parameters": {
+        "content": "## Why normalizing comes first\n\nField names, types and nesting differ per retailer.\n\n- `price` is a number on some retailers, a string on others\n- currency is `offers.priceCurrency` on some and `offers.currency` on others\n- stock sits under `additionalProperties`, or only in `offers.availability`\n- `brand` often carries marketing text such as \"Visit the Sony Store\"\n\nStock keeps three states: true, false, and unknown. Many retailers do not report it, and unknown is not the same as out of stock.",
+        "width": 400,
+        "height": 420,
+        "color": 4
+      }
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000002",
+      "name": "Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        480,
+        -440
+      ],
+      "parameters": {
+        "content": "## Store, then compare\n\n`Save today's snapshot` writes one row per product per day. `Detect moves outside pattern` asks the database what moved.\n\nThe schema and both views are in `supabase_schema.sql` in this repo.",
+        "width": 400,
+        "height": 420,
+        "color": 7
+      }
+    },
+    {
+      "id": "a0000000-0000-4000-8000-000000000003",
+      "name": "Note 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        920,
+        -440
+      ],
+      "parameters": {
+        "content": "## What the agent may and may not say\n\nIt recommends an action and states the size of the gap. It never states a margin or a price to set, because it has no access to your cost base.\n\nIf nothing moved, the query returns no rows and these nodes do not run. No gate needed.",
+        "width": 420,
+        "height": 420,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Every morning at 06:00": {
+      "main": [
+        [
+          {
+            "node": "Pages to watch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pages to watch": {
+      "main": [
+        [
+          {
+            "node": "E-commerce Scraping Tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "E-commerce Scraping Tool": {
+      "main": [
+        [
+          {
+            "node": "Normalize products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize products": {
+      "main": [
+        [
+          {
+            "node": "Save today's snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save today's snapshot": {
+      "main": [
+        [
+          {
+            "node": "Detect moves outside pattern",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect moves outside pattern": {
+      "main": [
+        [
+          {
+            "node": "Collect what moved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect what moved": {
+      "main": [
+        [
+          {
+            "node": "Pricing agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pricing agent": {
+      "main": [
+        [
+          {
+            "node": "Post the alert to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Pricing agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
