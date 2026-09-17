@@ -13,7 +13,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      # The tests read the normalize code out of workflow.n8n.json, so a change
-      # to the workflow that breaks price parsing fails here rather than in
+      # These read the normalize code out of workflow.n8n.json, so a change to
+      # the workflow that breaks price parsing fails here rather than in
       # someone's price history.
       - run: npm test
+
+  schema:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # 15 is the floor: the views use security_invoker.
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+        ports: ['5432:5432']
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      # Runs the schema against a real Postgres and asserts that detection
+      # reports transitions, not states. "Coherent on inspection" was how the
+      # repeated-alert bugs survived review.
+      - run: npm run test:sql

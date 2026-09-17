@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Tests for the normalize step of the n8n competitive pricing agent workflow.",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:sql": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f supabase_schema.sql && psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f test/schema.test.sql"
   },
   "license": "MIT"
 }
