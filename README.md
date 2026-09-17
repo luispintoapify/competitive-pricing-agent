@@ -9,8 +9,11 @@ The problem with most price monitoring is not collecting today's price. It is th
 ## How it works
 
 ```
-Schedule  ->  E-commerce Scraping Tool  ->  Normalize  ->  Postgres  ->  Detect  ->  Agent  ->  Slack
- daily          price, stock, brand        one shape      history      what moved   decide    alert
+Schedule -> E-commerce Scraping Tool -> Normalize -> Postgres -> Detect -> Agent -> Slack
+  daily        price, stock, brand      one shape    history   what moved  decide  alert
+                                             |
+                                             +-----> Capture health -> Slack
+                                                     what did not arrive
 ```
 
 1. A daily schedule reads the product URLs you list in one Code node.
@@ -21,42 +24,35 @@ Schedule  ->  E-commerce Scraping Tool  ->  Normalize  ->  Postgres  ->  Detect 
 6. Anything that moved goes to an AI agent, which writes a recommendation.
 7. The recommendation lands in Slack.
 
+A second branch checks what did **not** arrive. For a monitoring tool, "I received no data" has to be an event: without that check, a page that changes structure or starts blocking simply stops being recorded, and the first sign of trouble is a baseline that never fills. Silence and "nothing moved" look identical otherwise. That warning goes to the same channel but is kept separate from the pricing alert, because a scraping problem is not a price signal.
+
 ## The 14-day rule
 
 The detection view refuses to report anything until a product has **14 days of prior observations**:
 
 ```sql
-where b.observations >= 14
+where b.observations_30d >= 14
 ```
 
 This is deliberate. A workflow installed today has no history, and comparing today's price against a baseline of one day is noise dressed as insight. For the first two weeks the workflow runs, stores, and says nothing. Lower the threshold and you will get alerts, but they will not mean anything.
 
+Those 14 observations are counted **inside the same 30-day window** that produces the average and the deviation. Counting all history instead let a product with a handful of old rows and a single capture this week clear the gate and then be described as having an established pattern.
+
 If you need a baseline sooner than two weeks, backfill the table from your own records rather than shortening the window.
-
-## Why normalizing comes first
-
-This is the part worth copying even if you never run the rest. Field names, types, and nesting differ per retailer, so code that reads them naively works on one store and breaks on the next.
-
-| Field | What actually arrives |
-|---|---|
-| `price` | A number on some retailers, a string with currency symbols on others |
-| currency | `offers.priceCurrency` on some, `offers.currency` on others, and the value may be a symbol or an ISO code |
-| stock | Under `additionalProperties.inStock`, or only as `offers.availability`, or absent |
-| `brand` | Often carries marketing text such as "Visit the Sony Store" |
-| `name` | May carry accessibility suffixes such as "opens in a new tab" |
-| everything | An unresolvable URL returns an item with every field empty rather than an error |
-
-Stock keeps **three** states: `true`, `false`, and `null` for unknown. Many retailers do not report availability, and unknown is not the same as out of stock. Mapping one to the other produces false "competitor is out of stock" alerts, which is worse than no alert.
 
 ## Setup
 
-1. Import `workflow.n8n.json` into n8n.
-2. Run `supabase_schema.sql` against Postgres 12 or later, or a Supabase project. It creates the `price_history` table and the `price_baseline` and `price_moves_today` views.
-3. Add an Apify credential on the Actor node. Your token is in Apify Console under **Settings, Integrations**.
-4. Add a Postgres credential and select it in both Postgres nodes.
-5. Add a credential for your chat model, and a Slack credential with `chat:write`.
-6. Open **Pages to watch** and replace the example URLs with yours. Set your Slack channel.
-7. Run once manually and confirm a row landed in `price_history`, then activate.
+1. **Self-hosted n8n only:** install the Apify community node first, under **Settings, Community nodes**, package `@apify/n8n-nodes-apify`. On n8n Cloud it is already there. Without it the import succeeds and the Actor node shows up unrecognized.
+2. Import `workflow.n8n.json` into n8n.
+3. Run `supabase_schema.sql` against **Postgres 15 or later**, or a Supabase project. It creates the `pricing` schema, the `pricing.price_history` table, and the `price_baseline` and `price_moves_today` views. Postgres 15 is required because the views use `security_invoker`.
+4. Add an Apify credential on the Actor node. Your token is in Apify Console under **Settings, Integrations**.
+5. Add a Postgres credential and select it in both Postgres nodes. The role you connect with must own the `pricing` schema or be `service_role`; both bypass RLS, which is what lets the workflow write while everyone else is locked out.
+6. Add a credential for your chat model, and a Slack credential with `chat:write`.
+7. Open **Pages to watch** and replace the example URLs with yours. Set your Slack channel.
+8. Check the instance timezone under **Settings, General**. The schedule says 06:00, and n8n reads that in the instance timezone, not yours and not UTC.
+9. Run once manually and confirm a row landed in `pricing.price_history`, then activate.
+
+Run `npm test` to check the normalize step against real retailer responses before you trust it with your history. No dependencies.
 
 ## What it costs
 
@@ -70,13 +66,15 @@ The Actor is pay per event. Prices below are per product per day, at the Free an
 
 Proxy and browser rendering only apply on retailers that need them, so a realistic range is $0.0060 to $0.0096 per product per day on Free.
 
-| Watched | 30 days | 90 days |
-|---|---|---|
-| 25 products | $4.50 to $7.20 | $13.51 to $21.61 |
-| 100 products | $18.00 to $28.80 | $54.01 to $86.41 |
-| 300 products | $54.00 to $86.40 | $162.01 to $259.21 |
+At the top of that range, a 25-product watchlist costs about **$7 a month** and 300 products about **$86 a month**. Start at 25, look at your actual bill after a week, then scale. A daily schedule across 300 products is a real recurring cost, not a rounding error.
 
-Start at 25 products, look at your actual bill after a week, then scale. A daily schedule across 300 products is a real recurring cost, not a rounding error.
+Two things keep a bad day from becoming an expensive one:
+
+**A ceiling per run.** The Actor node sets `maxTotalChargeUsd`, so a run that goes wrong stops rather than spends. It ships at $1, which comfortably covers a 25-product watchlist. Raise it as your list grows, or the run will stop early and the collection warning will tell you it did.
+
+**Fewer paid retries.** The node retries twice, not three times. A run that hits its time cap has already spent its compute, and retrying it three times spends it three times for the same likely outcome.
+
+Roughly **4.9%** of this Actor's runs timed out over the last 30 days, against an overall success rate near 94%. A timeout is usually a throughput signal rather than a broken URL: the same URL with a smaller `maxProductResults` normally succeeds.
 
 ## Supported retailers
 
@@ -113,9 +111,9 @@ Curate the harvested list before pinning it. Keyword results include things a di
 - **Category drift.** An eBay search for winter jackets returned a Pokemon championship bomber jacket and a denim jacket.
 - **Resale listings.** eBay prices are set by individual sellers, often for used goods. They are a market signal, not a retailer's list price, and they do not fall on Black Friday for the same reasons.
 
-## Field differences that bite
+## Why normalizing comes first
 
-Every retailer answers a slightly different shape, all measured on the runs above:
+This is the part worth copying even if you never run the rest. Every retailer answers a slightly different shape, and code that reads them naively works on one store and writes nonsense on the next. Measured on the runs above:
 
 | | Amazon | Walmart | eBay |
 |---|---|---|---|
@@ -123,16 +121,20 @@ Every retailer answers a slightly different shape, all measured on the runs abov
 | `offers.priceCurrency` | symbol, `"$"` | ISO, `"USD"` | ISO, `"USD"` |
 | `brand` | object, sometimes `{slogan}` | object with `slogan` | `{name: null}` |
 | Stock | boolean in `additionalProperties.inStock` | absent | absent on detail pages |
+| `name` | may carry "opens in a new tab" | keyword-stuffed by sellers | seller-written |
+| any URL | an unresolvable one returns empty fields, not an error | | |
 
-Three consequences for any normalize step:
+Four rules follow, and the shipped workflow applies all four. `npm test` checks them against these exact responses.
 
-**Parse the price, never cast it.** One retailer hands you a number and another hands you a currency-prefixed string.
+**Parse the price, never cast it, and never assume a locale.** One retailer hands you a number and another a currency-prefixed string. Stripping everything but digits and dots is the obvious move and it is wrong outside the US: it reads `1.299,99` as `1.29999` and `12,99` as `1299`. Both are plausible numbers, both are silently wrong, and both are permanent once written. The rule that works: when both separators appear, the last one is the decimal separator; when only one appears, it is a decimal separator only if exactly two digits follow it.
 
-**Normalize the currency to ISO.** Amazon returns the symbol `$`. Storing that makes rows from different markets incomparable.
+**Store ISO 4217, never the symbol.** A row holding `$` cannot be compared with a `$` from another market, and nothing downstream can tell USD from CAD or AUD afterwards. A bare dollar sign is resolved by marketplace: `$` on `amazon.ca` is stored as `CAD`.
 
-**Read only strings out of `brand`.** Falling back to the object itself stringifies to `[object Object]`, which is what a first version of this collector wrote for every The North Face row. Amazon also uses `brand.slogan` to hold marketing text like `Visit the Carhartt Store`, so unwrap it and reject anything too long to be a brand.
+**Read only strings out of `brand`.** Falling through to the object stringifies to `[object Object]`, and it does so for the shapes that look harmless, such as `{name: null}`. Amazon also uses `brand.slogan` for copy like `Visit the Carhartt Store`, so unwrap that and reject anything too long to be a brand name.
 
-Stock deserves three states, not two. Absent is not the same as out of stock, and Walmart and eBay simply do not return availability on the paths above.
+**Canonicalize the URL you track on.** Marketplaces append variant and tracking parameters that change per request. Keep them and the same product arrives as a new `sku_key` every day, so it never accumulates a baseline and never alerts.
+
+Stock keeps **three** states: `true`, `false`, and `null` for unknown. Absent is not the same as out of stock, and Walmart and eBay do not report availability on detail pages at all. Collapsing unknown into out-of-stock produces false "competitor is out of stock" alerts, which is worse than no alert.
 
 ## Two gotchas that cost real time
 
@@ -150,19 +152,21 @@ curl -s "https://api.apify.com/v2/acts/apify~e-commerce-scraping-tool/builds/def
 
 The reasoning prompt is deliberately constrained. The agent does not know your cost, your margin, or your price floor, so it is forbidden from stating a margin outcome or a specific price to set. It recommends an action, states the size of the gap, and says how strong the pattern is. Anything more specific would be invented.
 
+The detection is entirely deterministic. Every threshold, every comparison and every transition is decided in SQL before the model sees anything, so the agent cannot change what counts as a move. It writes; it does not judge.
+
+It is also told that `product_name`, `brand`, `retailer` and `product_url` are scraped from pages nobody here controls, and are data to report rather than instructions to follow. A product title is an open text field on most marketplaces, which makes it a way to send text to whatever reads it. If a title contains something shaped like a directive, the agent is instructed to ignore it, describe the row from the numbers, and say the title looked manipulated.
+
 ## FAQ
 
-**Do I need Supabase specifically?** No. Any Postgres 12 or later works. The schema uses `jsonb` and filtered aggregates, both standard.
+**Do I need Supabase specifically?** No. Any Postgres 15 or later works. The schema uses `jsonb`, filtered aggregates and `security_invoker` views, all standard. Version 15 is the floor because of `security_invoker`.
+
+**Why does my Slack get a collection warning?** Because at least one watched URL returned nothing, or returned no price. That is a scraping problem, not a price signal, which is why it arrives as its own message. Check whether the page still exists, whether its layout changed, or whether the run hit its time or spend cap.
 
 **Can I use this without a database?** Not as written. The whole point is the baseline, and a baseline needs somewhere to live. A version that diffs only against the previous run needs no database, but it cannot tell you whether a drop is unusual.
 
-**Why n8n and not a script?** Because the destination changes more often than the logic. Swapping Slack for email, Sheets, or a shopping cart is a node change rather than a rewrite.
+**Does this work outside the US?** Yes. The Actor supports localized search across many country codes, the schema stores an ISO currency per row, and the normalize step parses both `1,299.99` and `1.299,99` correctly. An earlier version did not, which is why there are tests for it.
 
-**Does this work outside the US?** Yes. The Actor supports localized search across many country codes, and the schema stores currency per row.
-
-**How is this different from price monitoring SaaS?** Those are closed and usually priced per SKU. Here the data lands in your database, the reasoning prompt is a text field you can read and edit, and the destination is yours.
-
-**What happens when a retailer blocks the request?** The Actor handles retries and proxies. The node retries three times. Roughly 4% of this Actor's public runs time out, so a daily schedule will occasionally miss a day, and the views tolerate gaps.
+**What happens when a retailer blocks the request?** The Actor handles retries and proxies, and the node retries twice. Roughly 4.9% of this Actor's runs timed out over the last 30 days, so a daily schedule will occasionally miss a product. The views tolerate gaps, and the collection warning tells you which URLs came back empty rather than letting them disappear quietly.
 
 **Can an AI agent query the history directly?** Yes. Connect the same Actor over the [Apify MCP server](https://docs.apify.com/integrations/mcp?utm_source=github&utm_medium=readme&utm_campaign=gtm-cam-121) and ask in plain language.
 
