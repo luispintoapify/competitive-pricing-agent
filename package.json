@@ -1,0 +1,11 @@
+{
+  "name": "competitive-pricing-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tests for the normalize step of the n8n competitive pricing agent workflow.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "MIT"
+}

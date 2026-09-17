@@ -1,0 +1,19 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # The tests read the normalize code out of workflow.n8n.json, so a change
+      # to the workflow that breaks price parsing fails here rather than in
+      # someone's price history.
+      - run: npm test
