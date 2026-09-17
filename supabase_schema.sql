@@ -1,4 +1,4 @@
--- Competitive pricing agent · price history store
+-- Competitive pricing agent - price history store
 -- Requires Postgres 15 or later, which Supabase satisfies. The views use
 -- security_invoker, added in 15.
 -- Run once before importing the n8n workflow.
