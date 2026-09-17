@@ -94,9 +94,8 @@ Measured on September 11, 2026, keyword `winter jacket`, US:
 | Academy | Completed, returned nothing | 13s |
 | Nordstrom | Completed, returned nothing | 39s |
 | Macy's | Completed, returned nothing | 21s |
-| Dick's Sporting Goods | Timed out | 300s cap |
 
-An empty result is not an error. The run succeeds and hands back an empty list, so a collector that assumes every configured retailer produces rows will quietly record nothing for most of them. Test every retailer you plan to watch before you commit to a watchlist, and treat a timeout as a different problem from an empty result: Dick's may well work with a longer cap.
+An empty result is not an error. The run succeeds and hands back an empty list, so a collector that assumes every configured retailer produces rows will quietly record nothing for most of them. Test every retailer you plan to watch before you commit to a watchlist. A run that times out is a different diagnosis from one that returns an empty list: the first is a throughput limit and may succeed with a longer cap, the second means search found nothing.
 
 Direct product URLs are the more reliable path. They bypass search entirely, and the Actor falls back to generic extraction for stores without a dedicated extractor. An unresolvable URL returns an item with empty fields rather than an error, which is why the normalize step drops those rows.
 
