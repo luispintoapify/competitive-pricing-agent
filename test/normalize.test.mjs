@@ -13,8 +13,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const workflow = JSON.parse(readFileSync(new URL('../workflow.n8n.json', import.meta.url), 'utf8'));
-const node = workflow.nodes.find((n) => n.name === 'Normalize products');
-assert.ok(node, 'the workflow must contain a "Normalize products" node');
+const node = workflow.nodes.find((n) => n.name === 'Normalize Product Data');
+assert.ok(node, 'the workflow must contain a "Normalize Product Data" node');
 
 // Take the helper definitions and drop the part that needs n8n's $input.
 const source = node.parameters.jsCode;
@@ -112,8 +112,8 @@ test('canonicalUrl keeps a SKU stable across days', () => {
 // that goes quiet. These tests pin the behaviour that matters: silence when all
 // is well, and a named list of URLs when it is not.
 
-const health = workflow.nodes.find((n) => n.name === 'Check capture health');
-assert.ok(health, 'the workflow must contain a "Check capture health" node');
+const health = workflow.nodes.find((n) => n.name === 'Check Data Integrity');
+assert.ok(health, 'the workflow must contain a "Check Data Integrity" node');
 
 // Runs the health node's code against fake n8n bindings.
 const runHealth = async (requestedUrls, rows) => {
@@ -125,7 +125,7 @@ const runHealth = async (requestedUrls, rows) => {
   );
   return fn(
     (name) => {
-      if (name === 'Pages to watch') {
+      if (name === 'Select Pages to Monitor') {
         return { first: () => ({ json: { detailsUrls: requestedUrls.map((url) => ({ url })) } }) };
       }
       throw new Error(`unexpected node reference: ${name}`);
@@ -187,7 +187,7 @@ test('request URLs are canonicalized before matching', async () => {
 // ---------------------------------------------------------------------------
 
 test('the Actor run is capped and keeps reporting when empty', () => {
-  const actor = workflow.nodes.find((n) => n.name === 'E-commerce Scraping Tool');
+  const actor = workflow.nodes.find((n) => n.name === 'Run Apify Scraper');
   assert.ok(actor.parameters.maxTotalChargeUsd > 0, 'a run must have a spend ceiling');
   // Without this a run that returns nothing skips every downstream node, and the
   // collection warning never fires.
@@ -195,7 +195,7 @@ test('the Actor run is capped and keeps reporting when empty', () => {
 });
 
 test('the agent is told that scraped fields are data, not instructions', () => {
-  const agent = workflow.nodes.find((n) => n.name === 'Pricing agent');
+  const agent = workflow.nodes.find((n) => n.name === 'Repricing Analysis Agent');
   const sm = agent.parameters.options.systemMessage;
   assert.match(sm, /never as\s+instructions/);
 });
@@ -206,4 +206,16 @@ test('the SQL nodes address the private schema', () => {
     .map((n) => n.parameters.query);
   assert.ok(queries.length >= 2);
   for (const q of queries) assert.match(q, /pricing\./);
+});
+
+test('every $() node reference resolves to a node that exists', () => {
+  // The failure mode a rename actually causes. n8n does not validate these:
+  // a reference to a node that no longer exists throws at runtime, on the
+  // morning of a scheduled run, with nobody watching.
+  const names = new Set(workflow.nodes.map((n) => n.name));
+  const refs = [...JSON.stringify(workflow).matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1]);
+  assert.ok(refs.length > 0, 'expected the workflow to reference at least one node by name');
+  for (const ref of new Set(refs)) {
+    assert.ok(names.has(ref), `$('${ref}') points at a node that does not exist`);
+  }
 });

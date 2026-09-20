@@ -3,7 +3,7 @@
   "nodes": [
     {
       "id": "1073b360-f413-43fd-95f7-d0bc3aa33c8d",
-      "name": "Every morning at 06:00",
+      "name": "Every Morning at 6am",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -22,7 +22,7 @@
     },
     {
       "id": "eee50952-ac92-4b47-bf81-8008d8b04f27",
-      "name": "Pages to watch",
+      "name": "Select Pages to Monitor",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -36,7 +36,7 @@
     },
     {
       "id": "1e35bfa5-227f-4397-9090-8774ef1a20b5",
-      "name": "E-commerce Scraping Tool",
+      "name": "Run Apify Scraper",
       "type": "@apify/n8n-nodes-apify.apify",
       "typeVersion": 1,
       "position": [
@@ -70,7 +70,7 @@
     },
     {
       "id": "b5b41610-0915-405b-b306-b081a30df403",
-      "name": "Normalize products",
+      "name": "Normalize Product Data",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -84,7 +84,7 @@
     },
     {
       "id": "7a4f32d5-0bdf-45ba-9af4-1029ad3f1b6f",
-      "name": "Save today's snapshot",
+      "name": "Save Daily Snapshot to DB",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
@@ -108,7 +108,7 @@
     },
     {
       "id": "0ce60faa-4685-4b68-8e4b-44818be915f3",
-      "name": "Detect moves outside pattern",
+      "name": "Detect Price Changes",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
@@ -131,7 +131,7 @@
     },
     {
       "id": "8b2867cc-a739-4fd2-a79f-2d2ebb4b548e",
-      "name": "Collect what moved",
+      "name": "Collect Price Changes",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -144,7 +144,7 @@
     },
     {
       "id": "41935ff9-796e-426f-9828-5257c5bb2664",
-      "name": "Pricing agent",
+      "name": "Repricing Analysis Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
       "position": [
@@ -161,7 +161,7 @@
     },
     {
       "id": "749fe4b5-6fcc-43af-b68e-2cfead1304c6",
-      "name": "Chat model",
+      "name": "Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       "typeVersion": 1.3,
       "position": [
@@ -179,7 +179,7 @@
     },
     {
       "id": "fe8051cb-5aeb-4b5f-a4f6-0e467974d8c0",
-      "name": "Post the alert to Slack",
+      "name": "Send Slack Alert",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.7,
       "position": [
@@ -193,7 +193,7 @@
         "channelId": {
           "__rl": true,
           "mode": "name",
-          "value": "={{ $('Pages to watch').first().json.slackChannel }}"
+          "value": "={{ $('Select Pages to Monitor').first().json.slackChannel }}"
         },
         "text": "={{ $json.output }}",
         "otherOptions": {}
@@ -215,9 +215,9 @@
         -440
       ],
       "parameters": {
-        "content": "## Track competitor prices with Apify and post unusual moves to Slack\n\n## Who's it for\n\nEcommerce merchandisers, founders and pricing analysts who need to know when a competitor actually changes price, without reading a daily list of numbers that mostly did not move.\n\n## What it does\n\nEvery morning it reads your list of competitor product URLs and sends them to the Apify E-commerce Scraping Tool, which handles anti-bot, proxies and per-retailer extraction. There is no scraper to maintain here.\n\nA normalize step reduces per-retailer differences to one shape. Prices are parsed without assuming a locale, so `1.299,99` and `$1,299.99` both read correctly. Currency is stored as an ISO code rather than a symbol. Stock keeps three states, because \"not reported\" is not the same as \"out of stock\".\n\nOne row per product per day goes to Postgres. A view compares today against the trailing 30-day average and the 90-day low and reports **transitions, not states**, so a rival who cuts a price and holds it is reported once rather than every morning. It stays silent for the first 14 days, because a baseline of one day is noise.\n\nAn AI agent turns what moved into a recommendation and posts it to Slack. A second branch reports which URLs returned nothing, so a broken page cannot look like a quiet market.\n\n## How to set up\n\n1. Add the Apify community node. On n8n Cloud, search for it on the canvas; your instance owner must have verified community nodes enabled. Self-hosted, install `@apify/n8n-nodes-apify` under Settings, Community nodes.\n2. Run the schema in `supabase_schema.sql` (linked in the sticky note) against Postgres 15 or later. It creates a private schema with RLS enabled, so the table is never exposed through Supabase's Data API.\n3. Add credentials: Apify, Postgres, a chat model, Slack.\n4. Open **Pages to watch** and replace the example URLs with yours, and set your Slack channel.\n5. Check your instance timezone. The schedule says 06:00 and n8n reads that in the instance timezone.\n6. Run once manually and confirm a row landed in `pricing.price_history`.\n\n## Requirements\n\n- An Apify account. The Actor is pay per event, roughly $0.006 to $0.0096 per product per day, so 25 products costs about $7 a month.\n- Postgres 15 or later, or a Supabase project. Version 15 is the floor because the views use `security_invoker`.\n- A chat model credential and a Slack workspace.\n\n## How to customize\n\nThe detection thresholds live in one SQL view: the 5% band against the 30-day average, the 90-day low and high, and the 14-day baseline gate. Change them there and the agent's behaviour follows, because detection is deterministic and the model only writes.\n\nSwap Slack for email, Sheets or a webhook by replacing one node. To watch a category rather than fixed products, run the Actor in keyword mode once to harvest URLs, then pin them: keyword results drift daily and cannot produce a price series.\n\n---\n\n**Schema:** the `supabase_schema.sql` this template needs is in the repo linked from the template page.\n",
+        "content": "## Monitor competitor prices with Apify and post repricing alerts to Slack\n\n### Who's it for\n\nEcommerce merchandisers, founders and pricing analysts who need to know when a competitor actually changes price, without reading a daily list of numbers that mostly did not move.\n\n### How it works\n\nEvery morning the workflow reads your list of competitor product pages and sends them to the Apify E-commerce Scraping Tool, which handles anti-bot, proxies and per-retailer extraction. There is no scraper here to maintain.\n\nA normalize step reduces per-retailer differences to one shape. Prices are parsed without assuming a locale, so `1.299,99` and `$1,299.99` both read correctly. Currency is stored as an ISO code rather than a symbol. Stock keeps three states, because \"not reported\" is not the same as \"out of stock\".\n\nOne row per product per day goes to Postgres. A view compares today against the trailing 30-day average and the 90-day low and reports **transitions, not states**, so a rival who cuts a price and holds it is reported once rather than every morning.\n\nAn AI agent turns what moved into a recommendation and posts it to Slack. A second branch reports which URLs returned nothing, so a broken page never looks like a quiet market.\n\n**It stays silent for the first 14 days.** A baseline of one day is noise, so the workflow collects and says nothing until a product has 14 recent observations. Day one producing no alert is correct, not broken.\n\n### Setup steps\n\n1. Add the Apify community node. On n8n Cloud, search for it on the canvas; your instance owner must have verified community nodes enabled. Self-hosted, install `@apify/n8n-nodes-apify` under Settings, Community nodes.\n2. **Run `supabase_schema.sql` against your database before the first execution.** It creates the `pricing` schema, the `price_history` table and the two views this workflow queries. Without it the first run fails with `relation \"pricing.price_history\" does not exist`. The file is in the repository linked on this page.\n3. Add credentials: Apify, Postgres, a chat model, and Slack.\n4. Open **Select Pages to Monitor** and replace the example URLs with yours, then set your Slack channel.\n5. Check your instance timezone under Settings. The schedule says 6am and n8n reads that in the instance timezone, not yours.\n6. Run once manually and confirm a row landed in `pricing.price_history`.\n\n### Requirements\n\n- **Postgres 15 or later**, or a Supabase project. Version 15 is the floor because the views use `security_invoker`. The schema puts everything in a private schema with RLS enabled, so on Supabase the table is never exposed through the Data API.\n- An Apify account. The Actor is pay per event, roughly $0.006 to $0.0096 per product per day, so a 25-product watchlist costs about $7 a month.\n- A chat model credential and a Slack workspace.\n\n### Customization\n\nThe thresholds live in one SQL view: the 5% band against the 30-day average, the 90-day low and high, and the 14-day baseline gate. Change them there and the agent follows, because detection is deterministic and the model only writes.\n\nSwap Slack for email, Sheets or a webhook by replacing one node. To watch a category rather than fixed products, run the Actor in keyword mode once to harvest URLs and then pin them: keyword results drift daily and cannot produce a price series.\n",
         "width": 560,
-        "height": 1400
+        "height": 1600
       }
     },
     {
@@ -270,10 +270,10 @@
     },
     {
       "parameters": {
-        "jsCode": "// Operational check, deliberately separate from the commercial alert.\n//\n// For a monitoring tool, \"I received no data\" must be an event. Without this the\n// failure mode is silence: a page changes structure or starts blocking, the\n// product quietly stops being recorded, and the first sign of trouble is a\n// baseline that never fills. Silence looks identical to \"nothing moved\".\n//\n// This node returns NO items when every requested URL came back, which means the\n// warning node after it is skipped. It returns one item only when something is\n// missing, so a healthy run stays quiet by construction.\n\nconst canonical = (url) => {\n  const s = String(url || '').trim();\n  if (!s) return null;\n  return s.split('#')[0].split('?')[0].replace(/\\/+$/, '') || null;\n};\n\nconst requested = ($('Pages to watch').first().json.detailsUrls || [])\n  .map((d) => canonical(d.url))\n  .filter(Boolean);\n\nconst rows = $input.first().json.rows || [];\nconst stored = new Set(rows.map((r) => r.sku_key));\n\nconst missing = requested.filter((url) => !stored.has(url));\n\n// Recorded but with no usable price. The row exists, so the SKU is not missing,\n// but it contributes nothing to a baseline and is worth knowing about.\nconst priceless = rows.filter((r) => r.price === null).map((r) => r.sku_key);\n\nif (missing.length === 0 && priceless.length === 0) return [];\n\nconst lines = [\n  `Collection warning: ${rows.length} of ${requested.length} watched products recorded.`,\n];\nif (missing.length) {\n  lines.push('', `Returned nothing (${missing.length}):`);\n  for (const url of missing.slice(0, 15)) lines.push(`  ${url}`);\n  if (missing.length > 15) lines.push(`  and ${missing.length - 15} more`);\n}\nif (priceless.length) {\n  lines.push('', `Recorded without a price (${priceless.length}):`);\n  for (const url of priceless.slice(0, 15)) lines.push(`  ${url}`);\n  if (priceless.length > 15) lines.push(`  and ${priceless.length - 15} more`);\n}\nlines.push(\n  '',\n  'This is a collection problem, not a pricing signal. Check whether the page still',\n  'exists, whether its layout changed, or whether the run hit its time or cost cap.'\n);\n\nreturn [{\n  json: {\n    requested: requested.length,\n    recorded: rows.length,\n    missing,\n    priceless,\n    message: lines.join('\\n'),\n  },\n}];\n"
+        "jsCode": "// Operational check, deliberately separate from the commercial alert.\n//\n// For a monitoring tool, \"I received no data\" must be an event. Without this the\n// failure mode is silence: a page changes structure or starts blocking, the\n// product quietly stops being recorded, and the first sign of trouble is a\n// baseline that never fills. Silence looks identical to \"nothing moved\".\n//\n// This node returns NO items when every requested URL came back, which means the\n// warning node after it is skipped. It returns one item only when something is\n// missing, so a healthy run stays quiet by construction.\n\nconst canonical = (url) => {\n  const s = String(url || '').trim();\n  if (!s) return null;\n  return s.split('#')[0].split('?')[0].replace(/\\/+$/, '') || null;\n};\n\nconst requested = ($('Select Pages to Monitor').first().json.detailsUrls || [])\n  .map((d) => canonical(d.url))\n  .filter(Boolean);\n\nconst rows = $input.first().json.rows || [];\nconst stored = new Set(rows.map((r) => r.sku_key));\n\nconst missing = requested.filter((url) => !stored.has(url));\n\n// Recorded but with no usable price. The row exists, so the SKU is not missing,\n// but it contributes nothing to a baseline and is worth knowing about.\nconst priceless = rows.filter((r) => r.price === null).map((r) => r.sku_key);\n\nif (missing.length === 0 && priceless.length === 0) return [];\n\nconst lines = [\n  `Collection warning: ${rows.length} of ${requested.length} watched products recorded.`,\n];\nif (missing.length) {\n  lines.push('', `Returned nothing (${missing.length}):`);\n  for (const url of missing.slice(0, 15)) lines.push(`  ${url}`);\n  if (missing.length > 15) lines.push(`  and ${missing.length - 15} more`);\n}\nif (priceless.length) {\n  lines.push('', `Recorded without a price (${priceless.length}):`);\n  for (const url of priceless.slice(0, 15)) lines.push(`  ${url}`);\n  if (priceless.length > 15) lines.push(`  and ${priceless.length - 15} more`);\n}\nlines.push(\n  '',\n  'This is a collection problem, not a pricing signal. Check whether the page still',\n  'exists, whether its layout changed, or whether the run hit its time or cost cap.'\n);\n\nreturn [{\n  json: {\n    requested: requested.length,\n    recorded: rows.length,\n    missing,\n    priceless,\n    message: lines.join('\\n'),\n  },\n}];\n"
       },
       "id": "b7c1d2e3-0a41-4f52-9c63-51d0a2e4f601",
-      "name": "Check capture health",
+      "name": "Check Data Integrity",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -290,13 +290,13 @@
         "channelId": {
           "__rl": true,
           "mode": "name",
-          "value": "={{ $('Pages to watch').first().json.slackChannel }}"
+          "value": "={{ $('Select Pages to Monitor').first().json.slackChannel }}"
         },
         "text": "={{ $json.message }}",
         "otherOptions": {}
       },
       "id": "c8d2e3f4-1b52-4063-ad74-62e1b3f5a712",
-      "name": "Post a collection warning",
+      "name": "Send Slack Warning",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.2,
       "position": [
