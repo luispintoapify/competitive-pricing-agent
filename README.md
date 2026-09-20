@@ -2,9 +2,9 @@
 
 An n8n workflow that watches competitor product pages every day, keeps its own price history, and tells you only when a rival moves outside its established pattern. The reasoning step recommends an action instead of reporting a diff.
 
-Built on [E-commerce Scraping Tool](https://apify.com/apify/e-commerce-scraping-tool?utm_source=github&utm_medium=readme&utm_campaign=gtm-cam-121), an Apify Actor that handles anti-bot, proxies, and per-retailer extraction, so there is no scraper in this repo to maintain.
+Built on [E-commerce Scraping Tool](https://apify.com/apify/e-commerce-scraping-tool?utm_source=github&utm_medium=readme&utm_campaign=competitive-pricing-agent), an Apify Actor that handles anti-bot, proxies, and per-retailer extraction, so there is no scraper in this repo to maintain.
 
-The problem with most price monitoring is not collecting today's price. It is that a price on its own means nothing. A competitor at $86 is only interesting if you know they normally sell at $100, that they usually discount in late November, and that this year they moved nine days early. That needs memory, and memory needs a table.
+The problem with price monitoring is not collecting today's price. A price on its own means nothing: a competitor at $86 is only interesting if you know they normally sell at $100, and that this year they discounted nine days earlier than usual. That needs memory, and memory needs a table.
 
 ## How it works
 
@@ -76,6 +76,21 @@ Two things keep a bad day from becoming an expensive one:
 
 Roughly **4.9%** of this Actor's runs timed out over the last 30 days, against an overall success rate near 94%. A timeout is usually a throughput signal rather than a broken URL: the same URL with a smaller `maxProductResults` normally succeeds.
 
+## What is tested, and what is not
+
+`npm test` runs 20 checks with no dependencies. They read the code out of `workflow.n8n.json` rather than from a copy, so they exercise the file you import, not something that can drift away from it.
+
+| Covered | How |
+|---|---|
+| Price, currency, brand, stock and URL normalization | Unit tests against real Amazon, Walmart and eBay responses, including the European formats that a naive parser silently corrupts |
+| The detection views | Seven scenarios against a real Postgres, asserting who alerts today and who stays quiet |
+| The collection warning | Silence when every URL returns, a named list when one does not |
+| Node references | Every `$('Node name')` resolves, which n8n itself does not check |
+
+`npm run test:sql` needs a `DATABASE_URL` pointing at a Postgres 15 or later you can create objects on. CI runs both suites on every push.
+
+What the suite does not cover is the n8n wiring itself: credentials connecting, the shapes passed between nodes, the agent, and Slack. That is exercised by importing the workflow and running it once, and `test/first_run_check.sql` is there to tell you whether the first run wrote data worth keeping.
+
 ## Supported retailers
 
 The Actor's input schema lists **249 storefronts across 104 retailer brands** as valid targets for keyword search. Being on that list is not the same as keyword search returning results.
@@ -136,13 +151,11 @@ Four rules follow, and the shipped workflow applies all four. `npm test` checks 
 
 Stock keeps **three** states: `true`, `false`, and `null` for unknown. Absent is not the same as out of stock, and Walmart and eBay do not report availability on detail pages at all. Collapsing unknown into out-of-stock produces false "competitor is out of stock" alerts, which is worse than no alert.
 
-## Two gotchas that cost real time
+## Two gotchas worth knowing
 
-**`maxProductResults` caps the whole run, not each marketplace.** A single call listing Amazon, Nordstrom and Macy's with a cap of 30 returned 30 Amazon rows and nothing else. Run one Actor call per retailer, each with its own quota.
+**`maxProductResults` caps the whole run, not each marketplace.** One call listing three marketplaces with a cap of 30 returned 30 Amazon rows and nothing from the other two. Give each retailer its own call and its own quota.
 
-**The n8n Apify node reads only the first input item.** Emitting one item per retailer does not fan out: the node executes once and every later item is ignored. Use one node per retailer, or an explicit loop. If you loop, be aware that a retailer returning zero items skips the downstream nodes, so the loop never receives its continue signal and the retailers after it are never attempted.
-
-**The Apify MCP server truncates the marketplace list.** It exposes only the first 120 entries, cutting off mid-IKEA, so `www.walmart.com` and `www.target.com` are rejected as invalid options through MCP even though the Actor accepts them. Read the full list from the public build endpoint instead, which needs no token:
+**The Apify MCP server truncates the marketplace list** to the first 120 entries, cutting off mid-IKEA, so `www.walmart.com` and `www.target.com` are rejected as invalid through MCP even though the Actor accepts them. Read the real list from the public build endpoint, which needs no token:
 
 ```bash
 curl -s "https://api.apify.com/v2/acts/apify~e-commerce-scraping-tool/builds/default"
@@ -160,17 +173,15 @@ It is also told that `product_name`, `brand`, `retailer` and `product_url` are s
 
 **Do I need Supabase specifically?** No. Any Postgres 15 or later works. The schema uses `jsonb`, filtered aggregates and `security_invoker` views, all standard. Version 15 is the floor because of `security_invoker`.
 
-**Why does my Slack get a collection warning?** Because at least one watched URL returned nothing, or returned no price. That is a scraping problem, not a price signal, which is why it arrives as its own message. Check whether the page still exists, whether its layout changed, or whether the run hit its time or spend cap.
-
 **Can I use this without a database?** Not as written. The whole point is the baseline, and a baseline needs somewhere to live. A version that diffs only against the previous run needs no database, but it cannot tell you whether a drop is unusual.
 
-**Does this work outside the US?** Yes. The Actor supports localized search across many country codes, the schema stores an ISO currency per row, and the normalize step parses both `1,299.99` and `1.299,99` correctly. An earlier version did not, which is why there are tests for it.
+**Does this work outside the US?** Yes. The Actor supports localized search across many country codes, the schema stores an ISO currency per row, and the normalize step parses both `1,299.99` and `1.299,99` correctly.
 
 **What happens when a retailer blocks the request?** The Actor handles retries and proxies, and the node retries twice. Roughly 4.9% of this Actor's runs timed out over the last 30 days, so a daily schedule will occasionally miss a product. The views tolerate gaps, and the collection warning tells you which URLs came back empty rather than letting them disappear quietly.
 
-**Can an AI agent query the history directly?** Yes. Connect the same Actor over the [Apify MCP server](https://docs.apify.com/integrations/mcp?utm_source=github&utm_medium=readme&utm_campaign=gtm-cam-121) and ask in plain language.
+**Can an AI agent query the history directly?** Yes. Connect the same Actor over the [Apify MCP server](https://docs.apify.com/integrations/mcp?utm_source=github&utm_medium=readme&utm_campaign=competitive-pricing-agent) and ask in plain language.
 
-**Is scraping public product pages legal?** Collecting publicly available information is generally permitted in the US and EU, but it depends on the site's terms and on what you do with the data. Read [Is web scraping legal?](https://blog.apify.com/is-web-scraping-legal/?utm_source=github&utm_medium=readme&utm_campaign=gtm-cam-121) and take your own advice.
+**Is scraping public product pages legal?** Collecting publicly available information is generally permitted in the US and EU, but it depends on the site's terms and on what you do with the data. Read [Is web scraping legal?](https://blog.apify.com/is-web-scraping-legal/?utm_source=github&utm_medium=readme&utm_campaign=competitive-pricing-agent) and take your own advice.
 
 ## License
 
