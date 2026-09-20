@@ -219,3 +219,28 @@ test('every $() node reference resolves to a node that exists', () => {
     assert.ok(names.has(ref), `$('${ref}') points at a node that does not exist`);
   }
 });
+
+test('the schema the workflow needs travels with it', () => {
+  // The template must not depend on a repository a user may not be able to
+  // open. Everything needed to run it has to be on the canvas.
+  const stickies = workflow.nodes.filter((n) => n.type === 'n8n-nodes-base.stickyNote');
+  const schemaNote = stickies.find((s) => s.parameters.content.includes('create schema'));
+  assert.ok(schemaNote, 'a sticky note must carry the SQL schema');
+
+  const sql = schemaNote.parameters.content;
+  // Every relation the Postgres nodes query must be created by that SQL.
+  const queried = new Set(
+    workflow.nodes
+      .filter((n) => n.type === 'n8n-nodes-base.postgres')
+      .flatMap((n) => [...n.parameters.query.matchAll(/pricing\.(\w+)/g)].map((m) => m[1]))
+  );
+  assert.ok(queried.size >= 2);
+  for (const rel of queried) {
+    assert.match(sql, new RegExp(`(table|view)[^\\n]*pricing\\.${rel}\\b`), `the sticky SQL never creates pricing.${rel}`);
+  }
+
+  // The security properties are the reason this schema exists at all.
+  assert.match(sql, /enable row level security/);
+  assert.match(sql, /security_invoker = true/);
+  assert.match(sql, /revoke all on schema pricing from anon/);
+});

@@ -41,7 +41,7 @@ An AI agent turns what moved into a recommendation and posts it to Slack. A seco
 ### Setup steps
 
 1. Add the Apify community node. On n8n Cloud, search for it on the canvas; your instance owner must have verified community nodes enabled. Self-hosted, install `@apify/n8n-nodes-apify` under Settings, Community nodes.
-2. **Run `supabase_schema.sql` against your database before the first execution.** It creates the `pricing` schema, the `price_history` table and the two views this workflow queries. Without it the first run fails with `relation "pricing.price_history" does not exist`. The file is in the repository linked on this page.
+2. **Run `supabase_schema.sql` against your database before the first execution.** It creates the `pricing` schema, the `price_history` table and the two views this workflow queries. Without it the first run fails with `relation "pricing.price_history" does not exist`. **The full SQL is in the red sticky note on the canvas**, so you do not need anything outside this template.
 3. Add credentials: Apify, Postgres, a chat model, and Slack.
 4. Open **Select Pages to Monitor** and replace the example URLs with yours, then set your Slack channel.
 5. Check your instance timezone under Settings. The schedule says 6am and n8n reads that in the instance timezone, not yours.
@@ -72,7 +72,7 @@ so free is the only option for a first submission regardless.
 
 ## Still needed before you submit
 
-**A workflow image.** n8n's guidelines require one at the top of the description
+**A workflow image.** Still required. n8n's guidelines require one at the top of the description
 for any template that uses a community node, because the canvas preview does not
 render for those. Export it from the n8n editor: open the workflow, select all,
 then use the download-image option in the canvas menu.
