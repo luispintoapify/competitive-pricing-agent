@@ -1,5 +1,7 @@
 # competitive-pricing-agent
 
+[![test](https://github.com/luispintoapify/competitive-pricing-agent/actions/workflows/test.yml/badge.svg)](https://github.com/luispintoapify/competitive-pricing-agent/actions/workflows/test.yml)
+
 An n8n workflow that watches competitor product pages every day, keeps its own price history, and tells you only when a rival moves outside its established pattern. The reasoning step recommends an action instead of reporting a diff.
 
 Built on [E-commerce Scraping Tool](https://apify.com/apify/e-commerce-scraping-tool?utm_source=github&utm_medium=readme&utm_campaign=competitive-pricing-agent), an Apify Actor that handles anti-bot, proxies, and per-retailer extraction, so there is no scraper in this repo to maintain.
@@ -56,7 +58,7 @@ Run `npm test` to check the normalize step against real retailer responses befor
 
 ## What it costs
 
-The Actor is pay per event. Prices below are per product per day, at the Free and Bronze tiers, from the Actor's live pricing:
+The Actor is pay per event. The figures below are per product per day at the Free and Bronze tiers, read from the Actor's pricing in **September 2026**. Pricing changes, so check the [Actor page](https://apify.com/apify/e-commerce-scraping-tool?utm_source=github&utm_medium=readme&utm_campaign=competitive-pricing-agent) before budgeting against them.
 
 | Event | Free | Bronze |
 |---|---|---|
