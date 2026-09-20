@@ -42,7 +42,7 @@ If you need a baseline sooner than two weeks, backfill the table from your own r
 
 ## Setup
 
-1. **Self-hosted n8n only:** install the Apify community node first, under **Settings, Community nodes**, package `@apify/n8n-nodes-apify`. On n8n Cloud it is already there. Without it the import succeeds and the Actor node shows up unrecognized.
+1. **Add the Apify community node first.** On n8n Cloud, search for it on the canvas; the instance owner must have **verified community nodes** enabled in settings. Self-hosted, add the package `@apify/n8n-nodes-apify` under **Settings, Community nodes**. Without it the import succeeds and the Actor node shows up unrecognized.
 2. Import `workflow.n8n.json` into n8n.
 3. Run `supabase_schema.sql` against **Postgres 15 or later**, or a Supabase project. It creates the `pricing` schema, the `pricing.price_history` table, and the `price_baseline` and `price_moves_today` views. Postgres 15 is required because the views use `security_invoker`.
 4. Add an Apify credential on the Actor node. Your token is in Apify Console under **Settings, Integrations**.

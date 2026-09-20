@@ -215,10 +215,9 @@
         -440
       ],
       "parameters": {
-        "content": "## Competitor price monitoring with a memory\n\nWatches competitor product pages every morning, keeps a price history, and tells you only when a rival moves outside its own pattern.\n\n### Before your first run\n1. Run `supabase_schema.sql` against Postgres or Supabase.\n2. Add your Apify credential on the Actor node.\n3. Add a Postgres credential and a Slack credential.\n4. Open **Pages to watch** and set your URLs and channel.\n\nThe first two weeks are quiet by design: with less than 14 days of history there is no pattern to compare against, so nothing is reported.",
-        "width": 460,
-        "height": 420,
-        "color": 3
+        "content": "## Track competitor prices with Apify and post unusual moves to Slack\n\n## Who's it for\n\nEcommerce merchandisers, founders and pricing analysts who need to know when a competitor actually changes price, without reading a daily list of numbers that mostly did not move.\n\n## What it does\n\nEvery morning it reads your list of competitor product URLs and sends them to the Apify E-commerce Scraping Tool, which handles anti-bot, proxies and per-retailer extraction. There is no scraper to maintain here.\n\nA normalize step reduces per-retailer differences to one shape. Prices are parsed without assuming a locale, so `1.299,99` and `$1,299.99` both read correctly. Currency is stored as an ISO code rather than a symbol. Stock keeps three states, because \"not reported\" is not the same as \"out of stock\".\n\nOne row per product per day goes to Postgres. A view compares today against the trailing 30-day average and the 90-day low and reports **transitions, not states**, so a rival who cuts a price and holds it is reported once rather than every morning. It stays silent for the first 14 days, because a baseline of one day is noise.\n\nAn AI agent turns what moved into a recommendation and posts it to Slack. A second branch reports which URLs returned nothing, so a broken page cannot look like a quiet market.\n\n## How to set up\n\n1. Add the Apify community node. On n8n Cloud, search for it on the canvas; your instance owner must have verified community nodes enabled. Self-hosted, install `@apify/n8n-nodes-apify` under Settings, Community nodes.\n2. Run the schema in `supabase_schema.sql` (linked in the sticky note) against Postgres 15 or later. It creates a private schema with RLS enabled, so the table is never exposed through Supabase's Data API.\n3. Add credentials: Apify, Postgres, a chat model, Slack.\n4. Open **Pages to watch** and replace the example URLs with yours, and set your Slack channel.\n5. Check your instance timezone. The schedule says 06:00 and n8n reads that in the instance timezone.\n6. Run once manually and confirm a row landed in `pricing.price_history`.\n\n## Requirements\n\n- An Apify account. The Actor is pay per event, roughly $0.006 to $0.0096 per product per day, so 25 products costs about $7 a month.\n- Postgres 15 or later, or a Supabase project. Version 15 is the floor because the views use `security_invoker`.\n- A chat model credential and a Slack workspace.\n\n## How to customize\n\nThe detection thresholds live in one SQL view: the 5% band against the 30-day average, the 90-day low and high, and the 14-day baseline gate. Change them there and the agent's behaviour follows, because detection is deterministic and the model only writes.\n\nSwap Slack for email, Sheets or a webhook by replacing one node. To watch a category rather than fixed products, run the Actor in keyword mode once to harvest URLs, then pin them: keyword results drift daily and cannot produce a price series.\n\n---\n\n**Schema:** the `supabase_schema.sql` this template needs is in the repo linked from the template page.\n",
+        "width": 560,
+        "height": 1400
       }
     },
     {
@@ -234,7 +233,7 @@
         "content": "## Why normalizing comes first\n\nField names, types and nesting differ per retailer.\n\n- `price` is a number on some retailers, a string on others\n- currency is `offers.priceCurrency` on some and `offers.currency` on others\n- stock sits under `additionalProperties`, or only in `offers.availability`\n- `brand` often carries marketing text such as \"Visit the Sony Store\"\n\nStock keeps three states: true, false, and unknown. Many retailers do not report it, and unknown is not the same as out of stock.",
         "width": 400,
         "height": 420,
-        "color": 4
+        "color": 7
       }
     },
     {
@@ -266,7 +265,7 @@
         "content": "## What the agent may and may not say\n\nIt recommends an action and states the size of the gap. It never states a margin or a price to set, because it has no access to your cost base.\n\nIf nothing moved, the query returns no rows and these nodes do not run. No gate needed.",
         "width": 420,
         "height": 420,
-        "color": 5
+        "color": 7
       }
     },
     {
