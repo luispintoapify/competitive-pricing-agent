@@ -7,8 +7,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
-        -560,
-        0
+        -800,
+        40
       ],
       "parameters": {
         "rule": {
@@ -26,8 +26,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -336,
-        0
+        -560,
+        40
       ],
       "parameters": {
         "jsCode": "// The only node you edit.\n//\n// Any retailer works. Keyword search is a different matter: a marketplace being\n// on the Actor's supported list does not mean its search returns results, so\n// pin product URLs rather than relying on search. See the README.\nconst WATCH = [\n  'https://www.amazon.com/dp/REPLACE_ME',\n  'https://www.walmart.com/ip/REPLACE_ME/000000000',\n];\nconst SLACK_CHANNEL = '#pricing-alerts';\n\nreturn [{ json: { detailsUrls: WATCH.map((url) => ({ url })), slackChannel: SLACK_CHANNEL } }];\n"
@@ -40,8 +40,8 @@
       "type": "@apify/n8n-nodes-apify.apify",
       "typeVersion": 1,
       "position": [
-        -128,
-        0
+        -300,
+        40
       ],
       "parameters": {
         "operation": "Run actor and get dataset",
@@ -74,8 +74,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        96,
-        0
+        40,
+        40
       ],
       "parameters": {
         "jsCode": "// Normalize one Actor item per product into the row the database stores.\n//\n// Every retailer answers a slightly different shape. These are the three that\n// actually corrupt data if you get them wrong, all seen in real responses:\n//   price     a number on some retailers, a formatted string on others\n//   currency  a symbol on some, an ISO code on others\n//   brand     sometimes a string, sometimes an object, sometimes marketing text\n\n// Parse a price without assuming a locale.\n//\n// Stripping everything except digits and dots works on US formatting and\n// silently destroys European formatting: \"1.299,99 EUR\" becomes 1.29999 and\n// \"12,99 EUR\" becomes 1299. Both write a plausible-looking wrong number, which\n// is worse than failing.\n//\n// The rule: if both separators appear, the LAST one is the decimal separator.\n// If only one appears, it is a decimal separator only when exactly two digits\n// follow it and it occurs once.\nconst parsePrice = (v) => {\n  if (typeof v === 'number') return Number.isFinite(v) && v > 0 ? v : null;\n  if (typeof v !== 'string') return null;\n\n  // Drops currency symbols, ISO codes, and every kind of space including the\n  // non-breaking and narrow no-break spaces used as thousands separators.\n  let s = v.replace(/[^\\d.,]/g, '');\n  if (!s) return null;\n\n  const lastDot = s.lastIndexOf('.');\n  const lastComma = s.lastIndexOf(',');\n\n  if (lastDot !== -1 && lastComma !== -1) {\n    const decimalAt = Math.max(lastDot, lastComma);\n    s = s.slice(0, decimalAt).replace(/[.,]/g, '') + '.' + s.slice(decimalAt + 1).replace(/[.,]/g, '');\n  } else if (lastComma !== -1) {\n    const tail = s.length - lastComma - 1;\n    s = (tail === 2 && s.indexOf(',') === lastComma) ? s.replace(',', '.') : s.replace(/,/g, '');\n  } else if (lastDot !== -1) {\n    const tail = s.length - lastDot - 1;\n    if (!(tail === 2 && s.indexOf('.') === lastDot)) s = s.replace(/\\./g, '');\n  }\n\n  const n = Number.parseFloat(s);\n  return Number.isFinite(n) && n > 0 ? n : null;\n};\n\n// Store ISO 4217, never the symbol. A row holding \"$\" cannot be compared with a\n// row holding \"$\" from a different market, and the agent has no way to tell USD\n// from CAD or AUD after the fact.\nconst SYMBOL_TO_ISO = {\n  '$': 'USD', 'US$': 'USD', 'USD': 'USD',\n  'C$': 'CAD', 'CA$': 'CAD', 'A$': 'AUD', 'AU$': 'AUD', 'NZ$': 'NZD',\n  '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR',\n  'R$': 'BRL', 'Mex$': 'MXN', 'zł': 'PLN', 'Kč': 'CZK',\n  'kr': 'SEK', 'CHF': 'CHF', '₩': 'KRW', '₽': 'RUB', '₺': 'TRY',\n};\n\n// A bare \"$\" is ambiguous. Fall back to the marketplace's home currency when the\n// hostname says which market this is, rather than storing a symbol.\nconst HOST_TO_ISO = {\n  'amazon.com': 'USD', 'walmart.com': 'USD', 'ebay.com': 'USD', 'target.com': 'USD',\n  'amazon.ca': 'CAD', 'walmart.ca': 'CAD', 'bestbuy.ca': 'CAD',\n  'amazon.com.au': 'AUD', 'amazon.co.uk': 'GBP', 'argos.co.uk': 'GBP',\n  'amazon.de': 'EUR', 'amazon.fr': 'EUR', 'amazon.it': 'EUR', 'amazon.es': 'EUR',\n  'amazon.nl': 'EUR', 'amazon.pl': 'PLN', 'allegro.pl': 'PLN', 'alza.cz': 'CZK',\n};\n\nconst readCurrency = (item, extras, retailer) => {\n  const offers = item.offers || {};\n  const raw = String(offers.priceCurrency || offers.currency || extras.currencyRaw || '').trim();\n  if (/^[A-Z]{3}$/.test(raw)) return raw;\n  if (raw && SYMBOL_TO_ISO[raw]) {\n    // Ambiguous dollar signs defer to the marketplace we are reading.\n    if (raw === '$' && HOST_TO_ISO[retailer]) return HOST_TO_ISO[retailer];\n    return SYMBOL_TO_ISO[raw];\n  }\n  return HOST_TO_ISO[retailer] || null;\n};\n\n// Read ONLY strings out of brand.\n//\n// Falling through to the object itself stringifies to \"[object Object]\", and it\n// does so for the shapes that look harmless: {name: null} on eBay, and objects\n// carrying only marketing text. Amazon uses brand.slogan for copy such as\n// \"Visit the Carhartt Store\", so unwrap that and reject anything too long to be\n// a brand name.\nconst readBrand = (item) => {\n  const b = item.brand;\n  let raw = '';\n  if (typeof b === 'string') raw = b;\n  else if (b && typeof b === 'object') {\n    if (typeof b.name === 'string') raw = b.name;\n    else if (typeof b.slogan === 'string') raw = b.slogan;\n  }\n  raw = raw.trim();\n  if (!raw) return null;\n  const unwrapped = raw.replace(/^Visit the (.+) Store$/i, '$1').trim();\n  if (!unwrapped || unwrapped.length > 40 || unwrapped.split(/\\s+/).length > 4) return null;\n  return unwrapped;\n};\n\n// Stock is three-valued on purpose. Absent is not the same as out of stock, and\n// several retailers simply do not report availability on a detail page.\nconst readStock = (item) => {\n  const extras = item.additionalProperties || {};\n  if (typeof extras.inStock === 'boolean') return extras.inStock;\n  if (typeof item.inStock === 'boolean') return item.inStock;\n  const avail = String((item.offers && item.offers.availability) || item.availability || '').toLowerCase();\n  if (avail.includes('instock')) return true;\n  if (avail.includes('outofstock')) return false;\n  return null;\n};\n\n// The identity a SKU is tracked on has to be stable across days. Marketplaces\n// append tracking and variant parameters that change per request, so the same\n// product would otherwise arrive as a new sku_key and never build a baseline.\nconst canonicalUrl = (url) => {\n  const s = String(url || '').trim();\n  if (!s) return null;\n  const withoutQuery = s.split('#')[0].split('?')[0];\n  return withoutQuery.replace(/\\/+$/, '') || null;\n};\n\nconst rows = [];\n\nfor (const entry of $input.all()) {\n  const item = entry.json || {};\n  const offers = item.offers || {};\n  const extras = item.additionalProperties || {};\n\n  const url = canonicalUrl(item.url || item.inputUrl);\n  // An unresolvable URL comes back as an item with every field empty rather\n  // than as an error, so there is nothing to record.\n  if (!url) continue;\n\n  let retailer = null;\n  const host = url.match(/^https?:\\/\\/([^/?#]+)/);\n  if (host) retailer = host[1].replace(/^www\\./, '').toLowerCase();\n\n  rows.push({\n    sku_key: url,\n    product_url: url,\n    retailer,\n    product_name: String(item.name || item.title || '')\n      .replace(/opens in a new (window or )?tab$/i, '')\n      .trim() || null,\n    brand: readBrand(item),\n    price: parsePrice(offers.price !== undefined ? offers.price : offers.priceText),\n    currency: readCurrency(item, extras, retailer),\n    in_stock: readStock(item),\n    image_url: item.image || null,\n    raw: item,\n  });\n}\n\nreturn [{ json: { rows } }];\n"
@@ -88,8 +88,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        320,
-        0
+        300,
+        40
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -112,8 +112,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        544,
-        0
+        560,
+        40
       ],
       "parameters": {
         "operation": "executeQuery",
@@ -135,8 +135,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        768,
-        0
+        900,
+        40
       ],
       "parameters": {
         "jsCode": "// Fold every flagged product into one item, so the agent reasons once per run\n// rather than once per product.\nconst moved = $input.all().map((i) => i.json);\nreturn [{ json: { count: moved.length, moved: JSON.stringify(moved, null, 1) } }];"
@@ -148,8 +148,8 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
       "position": [
-        992,
-        0
+        1140,
+        40
       ],
       "parameters": {
         "promptType": "define",
@@ -165,8 +165,8 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       "typeVersion": 1.3,
       "position": [
-        992,
-        208
+        1140,
+        300
       ],
       "parameters": {},
       "notes": "Runs on your own key. Any chat model node works here: OpenAI, Anthropic, Google, or a local one.",
@@ -183,8 +183,8 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.7,
       "position": [
-        1216,
-        0
+        1440,
+        40
       ],
       "parameters": {
         "resource": "message",
@@ -211,13 +211,13 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -620,
-        -440
+        -840,
+        -1840
       ],
       "parameters": {
         "content": "## Monitor competitor prices with Apify and post repricing alerts to Slack\n\n### Who's it for\n\nEcommerce merchandisers, founders and pricing analysts who need to know when a competitor actually changes price, without reading a daily list of numbers that mostly did not move.\n\n### How it works\n\nEvery morning the workflow reads your list of competitor product pages and sends them to the Apify E-commerce Scraping Tool, which handles anti-bot, proxies and per-retailer extraction. There is no scraper here to maintain.\n\nA normalize step reduces per-retailer differences to one shape. Prices are parsed without assuming a locale, so `1.299,99` and `$1,299.99` both read correctly. Currency is stored as an ISO code rather than a symbol. Stock keeps three states, because \"not reported\" is not the same as \"out of stock\".\n\nOne row per product per day goes to Postgres. A view compares today against the trailing 30-day average and the 90-day low and reports **transitions, not states**, so a rival who cuts a price and holds it is reported once rather than every morning.\n\nAn AI agent turns what moved into a recommendation and posts it to Slack. A second branch reports which URLs returned nothing, so a broken page never looks like a quiet market.\n\n**It stays silent for the first 14 days.** A baseline of one day is noise, so the workflow collects and says nothing until a product has 14 recent observations. Day one producing no alert is correct, not broken.\n\n### Setup steps\n\n1. Add the Apify community node. On n8n Cloud, search for it on the canvas; your instance owner must have verified community nodes enabled. Self-hosted, install `@apify/n8n-nodes-apify` under Settings, Community nodes.\n2. **Run `supabase_schema.sql` against your database before the first execution.** It creates the `pricing` schema, the `price_history` table and the two views this workflow queries. Without it the first run fails with `relation \"pricing.price_history\" does not exist`. **The full SQL is in the red sticky note on the canvas**, so you do not need anything outside this template.\n3. Add credentials: Apify, Postgres, a chat model, and Slack.\n4. Open **Select Pages to Monitor** and replace the example URLs with yours, then set your Slack channel.\n5. Check your instance timezone under Settings. The schedule says 6am and n8n reads that in the instance timezone, not yours.\n6. Run once manually and confirm a row landed in `pricing.price_history`.\n\n### Requirements\n\n- **Postgres 15 or later**, or a Supabase project. Version 15 is the floor because the views use `security_invoker`. The schema puts everything in a private schema with RLS enabled, so on Supabase the table is never exposed through the Data API.\n- An Apify account. The Actor is pay per event, roughly $0.006 to $0.0096 per product per day, so a 25-product watchlist costs about $7 a month.\n- A chat model credential and a Slack workspace.\n\n### Customization\n\nThe thresholds live in one SQL view: the 5% band against the 30-day average, the 90-day low and high, and the 14-day baseline gate. Change them there and the agent follows, because detection is deterministic and the model only writes.\n\nSwap Slack for email, Sheets or a webhook by replacing one node. To watch a category rather than fixed products, run the Actor in keyword mode once to harvest URLs and then pin them: keyword results drift daily and cannot produce a price series.\n",
-        "width": 560,
-        "height": 1600
+        "width": 700,
+        "height": 1640
       }
     },
     {
@@ -226,13 +226,13 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        40,
-        -440
+        -840,
+        -120
       ],
       "parameters": {
-        "content": "## Why normalizing comes first\n\nField names, types and nesting differ per retailer.\n\n- `price` is a number on some retailers, a string on others\n- currency is `offers.priceCurrency` on some and `offers.currency` on others\n- stock sits under `additionalProperties`, or only in `offers.availability`\n- `brand` often carries marketing text such as \"Visit the Sony Store\"\n\nStock keeps three states: true, false, and unknown. Many retailers do not report it, and unknown is not the same as out of stock.",
-        "width": 400,
-        "height": 420,
+        "content": "## Schedule and scrape\n\nRuns every morning, reads the pages you listed in the next node, and sends them all to the Apify Actor in a single call.",
+        "width": 800,
+        "height": 400,
         "color": 7
       }
     },
@@ -242,13 +242,13 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        480,
-        -440
+        0,
+        -120
       ],
       "parameters": {
-        "content": "## Store, then compare\n\n`Save today's snapshot` writes one row per product per day. `Detect moves outside pattern` asks the database what moved.\n\nThe schema and both views are in `supabase_schema.sql` in this repo.",
-        "width": 400,
-        "height": 420,
+        "content": "## Normalize, then store\n\nField names, types and nesting differ per retailer, so the shape is flattened before anything is written. One row per product per day, then the database is asked what moved.",
+        "width": 800,
+        "height": 400,
         "color": 7
       }
     },
@@ -258,13 +258,13 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        920,
-        -440
+        860,
+        -120
       ],
       "parameters": {
-        "content": "## What the agent may and may not say\n\nIt recommends an action and states the size of the gap. It never states a margin or a price to set, because it has no access to your cost base.\n\nIf nothing moved, the query returns no rows and these nodes do not run. No gate needed.",
-        "width": 420,
-        "height": 420,
+        "content": "## Decide and alert\n\nThe agent turns what moved into a recommendation. Detection already happened in SQL, so the model writes rather than judges.",
+        "width": 800,
+        "height": 680,
         "color": 7
       }
     },
@@ -277,8 +277,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        316,
-        220
+        40,
+        640
       ],
       "notes": "Returns nothing when every URL came back, so a healthy run posts nothing."
     },
@@ -300,8 +300,8 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.2,
       "position": [
-        536,
-        220
+        300,
+        640
       ],
       "credentials": {
         "slackApi": {
@@ -314,8 +314,8 @@
     {
       "parameters": {
         "content": "## Run this SQL first\n\nThe workflow queries `pricing.price_history` and `pricing.price_moves_today`. They do not exist until you run this, and the first execution fails with `relation \"pricing.price_history\" does not exist` without it.\n\nNeeds **Postgres 15 or later**. On Supabase, paste it into the SQL editor and run once.\n\nIt puts everything in a private schema with RLS on and the `anon` and `authenticated` roles revoked, so on Supabase the table is never reachable through the Data API.\n\n```sql\n-- Requires Postgres 15 or later, which Supabase satisfies. The views use\n-- Run once before importing the n8n workflow.\n\ncreate schema if not exists pricing;\n\ncreate table if not exists pricing.price_history (\n  id            bigserial primary key,\n  captured_at   timestamptz not null default now(),\n  capture_date  date        not null default (now()::date),\n  sku_key       text        not null,          -- stable identity you track on; the canonical product URL by default\n  product_url   text        not null,\n  retailer      text,                          -- hostname, e.g. amazon.com\n  product_name  text,\n  brand         text,\n  price         numeric(12,2),\n  currency      text,                          -- ISO 4217, e.g. USD; the workflow maps symbols before writing\n  in_stock      boolean,                       -- null means the source did not report availability\n  image_url     text,\n  raw           jsonb                          -- full Actor output, so you can backfill new columns later\n);\n\n-- point: no policy means no access. n8n connects as the table owner or as\nalter table pricing.price_history enable row level security;\n\n-- Supabase ships the `anon` and `authenticated` roles. Plain Postgres does not,\ndo $$\nbegin\n  if exists (select 1 from pg_roles where rolname = 'anon') then\n    revoke all on schema pricing from anon, authenticated;\n    revoke all on all tables in schema pricing from anon, authenticated;\n    revoke all on all sequences in schema pricing from anon, authenticated;\n    alter default privileges in schema pricing revoke all on tables from anon, authenticated;\n  end if;\nend\n$$;\n\n-- One row per SKU per day. Re-running the workflow the same day updates instead of duplicating.\ncreate unique index if not exists price_history_sku_day\n  on pricing.price_history (sku_key, capture_date);\n\ncreate index if not exists price_history_sku_time\n  on pricing.price_history (sku_key, captured_at desc);\n\ncreate or replace view pricing.price_baseline\nwith (security_invoker = true) as\nselect\n  sku_key,\n  max(retailer) as retailer,\n  count(*) filter (where capture_date <  current_date\n                     and capture_date >= current_date - interval '30 days') as observations_30d,\n  min(capture_date) as first_seen,\n  avg(price)         filter (where capture_date <  current_date\n                               and capture_date >= current_date - interval '30 days') as avg_price_30d,\n  stddev_samp(price) filter (where capture_date <  current_date\n                               and capture_date >= current_date - interval '30 days') as stddev_price_30d,\n  min(price)         filter (where capture_date <  current_date\n                               and capture_date >= current_date - interval '90 days') as min_price_90d,\n  max(price)         filter (where capture_date <  current_date\n                               and capture_date >= current_date - interval '90 days') as max_price_90d\nfrom pricing.price_history\nwhere price is not null\ngroup by sku_key;\n\ncreate or replace view pricing.price_moves_today\nwith (security_invoker = true) as\nwith today as (\n  select sku_key, retailer, product_name, brand, price, currency, in_stock, product_url\n  from pricing.price_history\n  where capture_date = current_date\n),\nprevious as (\n  select distinct on (sku_key)\n    sku_key,\n    price        as prev_price,\n    in_stock     as prev_in_stock,\n    capture_date as prev_capture_date\n  from pricing.price_history\n  where capture_date < current_date\n  order by sku_key, capture_date desc\n)\nselect\n  t.sku_key,\n  t.retailer,\n  t.product_name,\n  t.brand,\n  t.product_url,\n  t.currency,\n  t.price                                                                            as price_today,\n  p.prev_price,\n  p.prev_capture_date,\n  b.observations_30d,\n  round(b.avg_price_30d, 2)                                                          as avg_price_30d,\n  round(b.min_price_90d, 2)                                                          as min_price_90d,\n  round(b.max_price_90d, 2)                                                          as max_price_90d,\n  round(((t.price - b.avg_price_30d) / nullif(b.avg_price_30d, 0) * 100)::numeric, 1) as pct_vs_avg_30d,\n  (t.price < b.min_price_90d)                                                        as is_new_90d_low,\n  case\n    when t.price is null or p.prev_price is null then null\n    when t.price < p.prev_price                  then 'down'\n    when t.price > p.prev_price                  then 'up'\n  end                                                                                as direction,\n  (t.in_stock is false and p.prev_in_stock is true)                                  as went_out_of_stock,\n  (t.in_stock is true  and p.prev_in_stock is false)                                 as came_back_in_stock,\n  case\n    when b.stddev_price_30d is null or b.stddev_price_30d = 0 then null\n    else round(((t.price - b.avg_price_30d) / b.stddev_price_30d)::numeric, 2)\n  end                                                                                as z_score,\n  t.in_stock\nfrom today t\njoin pricing.price_baseline b using (sku_key)\nleft join previous p using (sku_key)\nwhere b.observations_30d >= 14\n  and (\n        (\n              t.price is distinct from p.prev_price\n          and t.price is not null\n          and (\n                 t.price <= b.avg_price_30d * 0.95   -- 5% or more below the 30-day average\n              or t.price >= b.avg_price_30d * 1.05   -- 5% or more above it; a rise is a move too\n              or t.price <  b.min_price_90d          -- new 90-day low\n              or t.price >  b.max_price_90d          -- new 90-day high\n          )\n        )\n     or (t.in_stock is false and p.prev_in_stock is true)\n     or (t.in_stock is true  and p.prev_in_stock is false)\n  );\n```\n",
-        "height": 1200,
-        "width": 700,
+        "height": 1180,
+        "width": 820,
         "color": 3
       },
       "type": "n8n-nodes-base.stickyNote",
@@ -323,121 +323,137 @@
       "id": "e5f60718-2c63-4174-be85-73f2c4a6b823",
       "name": "Sticky Note Schema",
       "position": [
-        280,
-        420
+        860,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Check collection health\n\nReports which URLs returned nothing and which returned no price. It posts only when something is missing, so a healthy run stays quiet by construction.",
+        "width": 800,
+        "height": 400,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "id": "d3a91f55-6b20-4e7c-9a18-4c2f1b70de91",
+      "name": "Sticky Note Health",
+      "position": [
+        0,
+        480
       ]
     }
   ],
   "connections": {
-    "Every morning at 06:00": {
+    "Every Morning at 6am": {
       "main": [
         [
           {
-            "node": "Pages to watch",
+            "node": "Select Pages to Monitor",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Pages to watch": {
+    "Select Pages to Monitor": {
       "main": [
         [
           {
-            "node": "E-commerce Scraping Tool",
+            "node": "Run Apify Scraper",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "E-commerce Scraping Tool": {
+    "Run Apify Scraper": {
       "main": [
         [
           {
-            "node": "Normalize products",
+            "node": "Normalize Product Data",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Normalize products": {
+    "Normalize Product Data": {
       "main": [
         [
           {
-            "node": "Save today's snapshot",
+            "node": "Save Daily Snapshot to DB",
             "type": "main",
             "index": 0
           },
           {
-            "node": "Check capture health",
+            "node": "Check Data Integrity",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Save today's snapshot": {
+    "Save Daily Snapshot to DB": {
       "main": [
         [
           {
-            "node": "Detect moves outside pattern",
+            "node": "Detect Price Changes",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Detect moves outside pattern": {
+    "Detect Price Changes": {
       "main": [
         [
           {
-            "node": "Collect what moved",
+            "node": "Collect Price Changes",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Collect what moved": {
+    "Collect Price Changes": {
       "main": [
         [
           {
-            "node": "Pricing agent",
+            "node": "Repricing Analysis Agent",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Pricing agent": {
+    "Repricing Analysis Agent": {
       "main": [
         [
           {
-            "node": "Post the alert to Slack",
+            "node": "Send Slack Alert",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Chat model": {
+    "Chat Model": {
       "ai_languageModel": [
         [
           {
-            "node": "Pricing agent",
+            "node": "Repricing Analysis Agent",
             "type": "ai_languageModel",
             "index": 0
           }
         ]
       ]
     },
-    "Check capture health": {
+    "Check Data Integrity": {
       "main": [
         [
           {
-            "node": "Post a collection warning",
+            "node": "Send Slack Warning",
             "type": "main",
             "index": 0
           }

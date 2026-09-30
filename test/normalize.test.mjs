@@ -244,3 +244,87 @@ test('the schema the workflow needs travels with it', () => {
   assert.match(sql, /security_invoker = true/);
   assert.match(sql, /revoke all on schema pricing from anon/);
 });
+
+// ---------------------------------------------------------------------------
+// Graph and layout
+// ---------------------------------------------------------------------------
+// The connections object is keyed by node NAME and its values name nodes too.
+// Renaming a node without rewriting it leaves every edge pointing at a name
+// that no longer exists, and n8n imports that as a canvas of disconnected
+// nodes rather than refusing it. There is no error to notice.
+
+const NODE_W = 200;
+const NODE_H = 100;
+const STICKY_TEXT_BAND = 140;
+
+const nodeNames = new Set(workflow.nodes.map((n) => n.name));
+
+test('every connection endpoint is a node that exists', () => {
+  const conns = workflow.connections;
+  assert.ok(Object.keys(conns).length > 0, 'the workflow must have connections');
+  for (const [source, outputs] of Object.entries(conns)) {
+    assert.ok(nodeNames.has(source), `connections key "${source}" is not a node`);
+    for (const branches of Object.values(outputs)) {
+      for (const branch of branches) {
+        for (const edge of branch ?? []) {
+          assert.ok(nodeNames.has(edge.node), `"${source}" connects to "${edge.node}", which is not a node`);
+        }
+      }
+    }
+  }
+});
+
+test('every node except the trigger is reachable from the trigger', () => {
+  const conns = workflow.connections;
+  const trigger = workflow.nodes.find((n) => n.type.endsWith('scheduleTrigger'));
+  assert.ok(trigger, 'the workflow must have a trigger');
+
+  const seen = new Set([trigger.name]);
+  const queue = [trigger.name];
+  while (queue.length) {
+    for (const branches of Object.values(conns[queue.pop()] ?? {})) {
+      for (const branch of branches) {
+        for (const edge of branch ?? []) {
+          if (!seen.has(edge.node)) { seen.add(edge.node); queue.push(edge.node); }
+        }
+      }
+    }
+  }
+  // Sub-nodes attach to their parent rather than being fed by it.
+  const subNodes = new Set(Object.keys(conns).filter((s) => conns[s].ai_languageModel));
+  const orphans = workflow.nodes
+    .filter((n) => n.type !== 'n8n-nodes-base.stickyNote')
+    .map((n) => n.name)
+    .filter((name) => !seen.has(name) && !subNodes.has(name));
+  assert.deepEqual(orphans, [], 'these nodes are not reachable from the trigger');
+});
+
+test('no node sits under sticky note text', () => {
+  // The reason a reviewer rejects a template: the heading of a note printed on
+  // top of a node. A note may frame its nodes, but they belong below its text.
+  const stickies = workflow.nodes.filter((n) => n.type === 'n8n-nodes-base.stickyNote');
+  const nodes = workflow.nodes.filter((n) => n.type !== 'n8n-nodes-base.stickyNote');
+
+  for (const s of stickies) {
+    const [sx, sy] = s.position;
+    const band = { x1: sx, y1: sy, x2: sx + (s.parameters.width ?? 240), y2: sy + STICKY_TEXT_BAND };
+    for (const n of nodes) {
+      const [nx, ny] = n.position;
+      const box = { x1: nx, y1: ny, x2: nx + NODE_W, y2: ny + NODE_H };
+      const hits = box.x1 < band.x2 && box.x2 > band.x1 && box.y1 < band.y2 && box.y2 > band.y1;
+      assert.ok(!hits, `"${n.name}" overlaps the text of "${s.name}"`);
+    }
+  }
+});
+
+test('no two nodes overlap each other', () => {
+  const nodes = workflow.nodes.filter((n) => n.type !== 'n8n-nodes-base.stickyNote');
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const [ax, ay] = nodes[i].position;
+      const [bx, by] = nodes[j].position;
+      const hits = ax < bx + NODE_W && ax + NODE_W > bx && ay < by + NODE_H && ay + NODE_H > by;
+      assert.ok(!hits, `"${nodes[i].name}" and "${nodes[j].name}" overlap`);
+    }
+  }
+});
