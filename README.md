@@ -2,6 +2,8 @@
 
 [![test](https://github.com/luispintoapify/competitive-pricing-agent/actions/workflows/test.yml/badge.svg)](https://github.com/luispintoapify/competitive-pricing-agent/actions/workflows/test.yml)
 
+**Published on the [n8n template library](https://n8n.io/workflows/19750-monitor-competitor-price-shifts-with-apify-postgres-openai-and-slack/).** Importing from there and importing `workflow.n8n.json` from this repository give you the same workflow; this repository adds the schema file, the tests and the reasoning behind the design.
+
 An n8n workflow that watches competitor product pages every day, keeps its own price history, and tells you only when a rival moves outside its established pattern. The reasoning step recommends an action instead of reporting a diff.
 
 Built on [E-commerce Scraping Tool](https://apify.com/apify/e-commerce-scraping-tool?utm_source=github&utm_medium=readme&utm_campaign=competitive-pricing-agent), an Apify Actor that handles anti-bot, proxies, and per-retailer extraction, so there is no scraper in this repo to maintain.
@@ -44,6 +46,7 @@ If you need a baseline sooner than two weeks, backfill the table from your own r
 
 ## Setup
 
+0. The fastest start is to [open the template](https://n8n.io/workflows/19750-monitor-competitor-price-shifts-with-apify-postgres-openai-and-slack/) and use it directly in your n8n instance. The steps below apply either way.
 1. **Add the Apify community node first.** On n8n Cloud, search for it on the canvas; the instance owner must have **verified community nodes** enabled in settings. Self-hosted, add the package `@apify/n8n-nodes-apify` under **Settings, Community nodes**. Without it the import succeeds and the Actor node shows up unrecognized.
 2. Import `workflow.n8n.json` into n8n.
 3. Run `supabase_schema.sql` against **Postgres 15 or later**, or a Supabase project. It creates the `pricing` schema, the `pricing.price_history` table, and the `price_baseline` and `price_moves_today` views. Postgres 15 is required because the views use `security_invoker`.

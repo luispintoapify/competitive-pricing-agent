@@ -1,5 +1,5 @@
 {
-  "name": "Monitor competitor prices with Apify and post repricing alerts to Slack",
+  "name": "Monitor competitor price shifts with Apify, Postgres, OpenAI, and Slack",
   "nodes": [
     {
       "id": "1073b360-f413-43fd-95f7-d0bc3aa33c8d",
