@@ -328,3 +328,12 @@ test('no two nodes overlap each other', () => {
     }
   }
 });
+
+test('the workflow carries a link back to its source', () => {
+  // An imported workflow is separated from the page it came from. If the only
+  // route to the schema, the tests and the reasoning is that page, the copy on
+  // someone's canvas is a dead end.
+  const stickies = workflow.nodes.filter((n) => n.type === 'n8n-nodes-base.stickyNote');
+  const linked = stickies.filter((s) => s.parameters.content.includes('github.com/luispintoapify/competitive-pricing-agent'));
+  assert.ok(linked.length >= 1, 'at least one sticky note must link to the repository');
+});
